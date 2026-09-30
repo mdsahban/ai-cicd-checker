@@ -1,0 +1,38 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-and-build:
+    name: Test and Build
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Download the code onto the GitHub Actions runner
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Install Node.js (version 18)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm' # This speeds up future builds by caching dependencies
+
+      # Step 3: Install our project dependencies securely
+      - name: Install Dependencies
+        run: npm ci
+
+      # Step 4: Run our Jest tests. If any test fails, the pipeline stops here!
+      - name: Run Tests
+        run: npm test
+
+      # Step 5: Verify that the Dockerfile builds successfully
+      - name: Test Docker Build
+        run: docker build -t ai-cicd-checker:test .
