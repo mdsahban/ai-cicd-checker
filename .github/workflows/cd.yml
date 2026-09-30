@@ -6,11 +6,9 @@ on:
       - main
 
 jobs:
-  build-and-push:
-    name: Build and Push to GHCR
+  security-and-publish:
+    name: Security Scan and Publish
     runs-on: ubuntu-latest
-    
-    # We must explicitly grant GitHub Actions permission to write to our packages (GHCR)
     permissions:
       contents: read
       packages: write
@@ -19,8 +17,21 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 1: Authenticate to GitHub Container Registry using the built-in GITHUB_TOKEN
-      # We NEVER hardcode passwords here. GITHUB_TOKEN is a temporary, automatic token.
+      # Build the image locally first so Trivy can scan it
+      - name: Build Docker Image for Scanning
+        run: docker build -t temp-image:latest .
+
+      # PHASE 7 Security: Run Trivy Vulnerability Scanner
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'temp-image:latest'
+          format: 'table'
+          exit-code: '0' # Set to 1 if you want to stop the deployment on vulnerabilities
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -28,13 +39,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 2: Build the Docker image and push it to GHCR
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          # We tag the image with 'latest' and also the specific git commit ID for versioning
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+  deploy:
+    name: Deploy to EC2
+    needs: security-and-publish # This ensures deployment only happens IF the build/scan succeeds
+    runs-on: ubuntu-latest
+
+    steps:
+      # PHASE 7 CD: SSH into our EC2 instance and restart the container
+      - name: SSH and Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Pull the newest image from GitHub Container Registry
+            sudo docker pull ghcr.io/${{ github.repository }}:latest
+            
+            # Stop and remove the old container gracefully. The "|| true" ensures the pipeline doesn't fail if it's the very first deployment and the container doesn't exist yet.
+            sudo docker stop cicd-test || true
+            sudo docker rm cicd-test || true
+            
+            # Run the new container
+            sudo docker run -d -p 3000:3000 --name cicd-test ghcr.io/${{ github.repository }}:latest
+            
+            # Wait 5 seconds for the Node app to boot up
+            sleep 5
+            
+            # Perform a final health check on the production server
+            curl -f http://localhost:3000/health || exit 1
