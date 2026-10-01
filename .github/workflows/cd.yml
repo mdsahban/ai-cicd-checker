@@ -77,3 +77,16 @@ jobs:
             
             # Perform a final health check on the production server
             curl -f http://localhost:3000/health || exit 1
+
+      - name: Setup Node.js for AI Script
+        if: always() # We must setup Node even if the SSH deploy failed, so the AI can report the failure!
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Generate AI Deployment Report
+        if: always() # Always run this step so the AI can analyze both SUCCESS and FAILED deployments
+        env:
+          DEPLOYMENT_STATUS: ${{ job.status }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: node scripts/ai-deployment-report.js
