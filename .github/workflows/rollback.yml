@@ -1,0 +1,38 @@
+name: Manual Rollback
+
+on:
+  # 'workflow_dispatch' allows us to trigger this pipeline manually from the GitHub UI!
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'The Git Commit SHA to roll back to (e.g., f31a451)'
+        required: true
+
+jobs:
+  rollback:
+    name: Rollback EC2 to specific version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH and Rollback
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "Initiating Rollback to commit SHA: ${{ github.event.inputs.commit_sha }}"
+            
+            # 1. Pull the specific older image using the exact Commit SHA tag we created in Phase 6
+            sudo docker pull ghcr.io/${{ github.repository }}:${{ github.event.inputs.commit_sha }}
+            
+            # 2. Stop and remove the broken container
+            sudo docker stop cicd-test || true
+            sudo docker rm cicd-test || true
+            
+            # 3. Start the older, stable container
+            sudo docker run -d -p 3000:3000 --name cicd-test ghcr.io/${{ github.repository }}:${{ github.event.inputs.commit_sha }}
+            
+            # 4. Perform a health check to ensure the rollback was successful
+            sleep 5
+            curl -f http://localhost:3000/health || exit 1
